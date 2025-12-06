@@ -1,0 +1,29 @@
+@if (selectedEnemy(); as enemy) {
+  <div class="absolute top-20 right-4 w-64 p-3 bg-gray-900/70 text-white rounded-lg shadow-2xl backdrop-blur-sm border border-cyan-500/30 text-xs font-mono">
+    <h3 class="text-lg font-bold text-cyan-300 truncate mb-2">{{ enemy.name }}</h3>
+
+    <div class="relative w-full h-4 bg-gray-700 rounded-full overflow-hidden mb-2">
+      <div class="h-full bg-red-500" [style.width.%]="(enemy.health / enemy.maxHealth) * 100"></div>
+      <span class="absolute inset-0 text-center text-xs font-bold">{{ enemy.health | number:'1.0-0' }} / {{ enemy.maxHealth }}</span>
+    </div>
+
+    <div class="grid grid-cols-2 gap-x-4 gap-y-1 text-gray-300">
+      <span class="font-semibold text-cyan-400">Type:</span>
+      <span>{{ enemy.genomeType }}</span>
+
+      <span class="font-semibold text-cyan-400">Behavior:</span>
+      <span>{{ enemy.behavior }}</span>
+      
+      <span class="font-semibold text-cyan-400 col-span-2 mt-1 border-b border-gray-600">Genome</span>
+
+      <span class="font-semibold">Speed:</span>
+      <span>{{ enemy.genome.speed | number:'1.2-2' }}</span>
+
+      <span class="font-semibold">Armor:</span>
+      <span>{{ (enemy.genome.armor * 100) | number:'1.0-0' }}%</span>
+
+      <span class="font-semibold">Size:</span>
+      <span>{{ enemy.genome.bodySize | number:'1.2-2' }}</span>
+    </div>
+  </div>
+}
