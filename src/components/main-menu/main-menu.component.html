@@ -1,0 +1,99 @@
+<div class="fixed inset-0 z-20 bg-gray-900/80 flex flex-col items-center justify-center text-white p-4 backdrop-blur-sm text-center">
+  <header class="mb-8">
+    <h1 class="text-6xl font-bold text-cyan-300 drop-shadow-lg title-glow">ASSALTO ARCANO</h1>
+    <p class="text-xl text-gray-400 mt-2">Sopravvivi all'ondata. Scatena la magia.</p>
+  </header>
+  
+  <div class="flex flex-col items-center w-full max-w-2xl">
+    <!-- Main Action Panel -->
+    <div class="w-full p-6 mb-6">
+      @if (modelsLoaded()) {
+        <p class="mb-6 text-lg animate-pulse text-cyan-400">Fucina Perpetua pronta. Scenari e agenti forgiati.</p>
+        <button 
+          (click)="startSimulation()"
+          class="px-10 py-5 bg-cyan-600 hover:bg-cyan-500 text-white font-bold text-2xl rounded-lg shadow-lg transition-all transform hover:scale-105"
+        >
+          Avvia Simulazione
+        </button>
+      } @else {
+        <div class="flex flex-col items-center">
+          <div class="w-64 h-4 bg-gray-700 rounded-full overflow-hidden">
+              <div class="h-full bg-cyan-500 rounded-full animate-pulse-fast-progress"></div>
+          </div>
+          <p class="mt-4 text-lg text-gray-300">Inizializzazione Fucina Perpetua...</p>
+          <p class="text-sm text-gray-500">Caricamento modelli 3D e asset di base.</p>
+        </div>
+      }
+    </div>
+
+    <!-- Forge Status Panel -->
+    <div class="w-full bg-gray-900/50 border border-cyan-700/50 rounded-lg p-4 text-left shadow-2xl">
+      <h2 class="text-xl font-semibold text-cyan-400 border-b border-cyan-700/50 pb-2 mb-3">Stato della Fucina Perpetua</h2>
+      <div class="space-y-3 text-sm">
+        <!-- Scenario Generation Status -->
+        <div class="flex items-center gap-3">
+          <span class="font-semibold text-gray-300 w-32 shrink-0">Scenario:</span>
+          @switch (scenarioStatus()) {
+            @case ('generating') {
+              <div class="flex items-center gap-2 text-yellow-400">
+                <svg class="w-4 h-4 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                <span>In forgiatura...</span>
+              </div>
+            }
+            @case ('done') {
+              <div class="flex items-center gap-2 text-green-400">
+                <svg class="w-4 h-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" /></svg>
+                <span>Forgiato con successo.</span>
+              </div>
+            }
+            @case ('error') {
+              <div class="flex items-center gap-2 text-red-400">
+                <svg class="w-4 h-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm-1-9a1 1 0 112 0v2a1 1 0 11-2 0V9zm1-4a1 1 0 100 2 1 1 0 000-2z" clip-rule="evenodd" /></svg>
+                <span>Errore di forgiatura.</span>
+              </div>
+            }
+            @default {
+              <span class="text-gray-500">In attesa...</span>
+            }
+          }
+        </div>
+        
+        <!-- Eidolon Generation Status -->
+        <div class="flex items-start gap-3">
+          <span class="font-semibold text-gray-300 w-32 shrink-0">Eidolon attuale:</span>
+          <span class="text-cyan-300 min-w-0 break-words">{{ forgeStatusMessage() }}</span>
+        </div>
+
+        <!-- Queued Eidolons -->
+        <div class="pt-2">
+          <h3 class="font-semibold text-gray-300 mb-2">Eidolon in Coda ({{ generatedEnemiesQueue().length }})</h3>
+          @if (generatedEnemiesQueue().length > 0) {
+            <div class="h-24 overflow-y-auto pr-2 bg-black/20 rounded">
+              <ul class="space-y-1">
+                @for (enemy of generatedEnemiesQueue(); track enemy.name) {
+                  <li class="px-2 py-1 bg-gray-800/50 rounded text-gray-300 animate-fade-in">{{ enemy.name }}</li>
+                }
+              </ul>
+            </div>
+          } @else {
+            <p class="text-gray-500 italic">La coda è vuota. La fucina sta lavorando...</p>
+          }
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <footer class="absolute bottom-8 text-gray-500 text-sm">
+    <p>Tutti gli agenti e gli scenari vengono generati proceduralmente dall'IA in background.</p>
+  </footer>
+</div>
+
+<style>
+  @keyframes fade-in {
+    from { opacity: 0; transform: translateY(-10px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .animate-fade-in {
+    animation: fade-in 0.5s ease-out forwards;
+  }
+</style>

@@ -1,5 +1,5 @@
 export const SIMULATION_WORKER_SCRIPT = `
-// --- Self-contained Worker Script for Eidolon Engine ---
+// --- Self-contained Worker Script for Assalto Arcano ---
 'use strict';
 
 // 1. MODELS AND TYPES (from simulation.model.ts)
@@ -76,28 +76,27 @@ class Quadtree {
 // 3. AI LOGIC (from services/agent-decision.service.ts)
 class AgentDecisionService {
     decideBehavior(enemy, playerPosition, enemiesNearby) {
-        const updatedEnemy = { ...enemy };
-        updatedEnemy.behaviorTimeout--;
-        if (updatedEnemy.behaviorTimeout <= 0) {
+        enemy.behaviorTimeout--;
+        if (enemy.behaviorTimeout <= 0) {
             const dx = playerPosition.x - enemy.position.x;
-            const dz = playerPosition.z - enemy.position.y;
+            const dz = playerPosition.y - enemy.position.y;
             const distance = Math.sqrt(dx * dx + dz * dz);
             const rand = Math.random();
             if (distance > 8 && rand < 0.9) {
-                updatedEnemy.behavior = 'advancing';
-                updatedEnemy.behaviorTimeout = 180 + Math.floor(Math.random() * 120);
+                enemy.behavior = 'advancing';
+                enemy.behaviorTimeout = 180 + Math.floor(Math.random() * 120);
             }
             else if (rand < 0.6) {
-                updatedEnemy.behavior = 'advancing';
-                updatedEnemy.behaviorTimeout = 120 + Math.floor(Math.random() * 120);
+                enemy.behavior = 'advancing';
+                enemy.behaviorTimeout = 120 + Math.floor(Math.random() * 120);
             }
             else {
-                updatedEnemy.behavior = 'strafing';
-                updatedEnemy.strafeDirection = Math.random() < 0.5 ? -1 : 1;
-                updatedEnemy.behaviorTimeout = 60 + Math.floor(Math.random() * 60);
+                enemy.behavior = 'strafing';
+                enemy.strafeDirection = Math.random() < 0.5 ? -1 : 1;
+                enemy.behaviorTimeout = 60 + Math.floor(Math.random() * 60);
             }
         }
-        return updatedEnemy;
+        return enemy;
     }
 }
 
@@ -107,6 +106,7 @@ class SimulationWorkerLogic {
         this.agentDecisionService = new AgentDecisionService();
         this.playerHealth = 100;
         this.maxPlayerHealth = 100;
+        this.playerDamageCooldown = 0;
         this.gameState = 'creation';
         this.initialEnemyCount = 0;
         this.enemies = new Map();
@@ -131,6 +131,12 @@ class SimulationWorkerLogic {
     }
 
     prepareAndStartGame(templates, count) {
+        // Reset all core simulation state for a clean restart
+        this.playerHealth = this.maxPlayerHealth;
+        this.gameState = 'creation'; // Set to 'running' via 'start' message
+        this.tickCounter = 0;
+        this.enemiesDefeated = 0;
+        
         this.initialEnemyCount = count;
         this.nextEnemyId = 0;
         const initialEnemies = new Map();
@@ -224,6 +230,11 @@ class SimulationWorkerLogic {
     tick(playerPosition) {
         if (this.gameState !== 'running') return;
         this.tickCounter++;
+
+        if (this.playerDamageCooldown > 0) {
+            this.playerDamageCooldown--;
+        }
+
         const bounds = { x: -this.worldWidth / 2, y: -this.worldLength / 2, width: this.worldWidth, height: this.worldLength };
         const quadtree = new Quadtree(bounds);
         for (const enemy of this.enemies.values()) {
@@ -271,13 +282,28 @@ class SimulationWorkerLogic {
             
             const moveSpeed = enemy.genome.speed;
             const dx = playerPosition.x - enemy.position.x;
-            const dz = playerPosition.z - enemy.position.y;
+            const dz = playerPosition.y - enemy.position.y;
             const distance = Math.sqrt(dx * dx + dz * dz);
             
             if (distance < 1.5) {
-                this.damagePlayer(10);
-                defeatedEnemies.add(enemy.id);
-                continue;
+                if (this.playerDamageCooldown <= 0) {
+                    this.damagePlayer(10);
+                    this.playerDamageCooldown = 30; // 0.5 sec cooldown at 60tps
+                }
+
+                // Instead of dying on contact, knock the enemy back.
+                const knockbackDistance = 2.5;
+                if (distance > 0.01) { // Check to avoid division by zero
+                    enemy.position.x -= (dx / distance) * knockbackDistance;
+                    enemy.position.y -= (dz / distance) * knockbackDistance;
+                }
+
+                // And force a temporary behavior change to prevent getting stuck.
+                enemy.behavior = 'strafing';
+                enemy.strafeDirection = Math.random() < 0.5 ? -1 : 1;
+                enemy.behaviorTimeout = 90 + Math.floor(Math.random() * 60);
+                
+                continue; // Skip movement for this tick to let the knockback apply.
             }
             
             switch (enemy.behavior) {

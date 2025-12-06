@@ -31,16 +31,12 @@ export class Quadtree {
         const hw = width / 2;
         const hh = height / 2;
 
-        // FIX: Replace `new Rectangle(...)` with object literals, as Rectangle is an interface.
         const ne = { x: x + hw, y: y, width: hw, height: hh };
         this.northeast = new Quadtree(ne, this.capacity);
-        // FIX: Replace `new Rectangle(...)` with object literals, as Rectangle is an interface.
         const nw = { x: x, y: y, width: hw, height: hh };
         this.northwest = new Quadtree(nw, this.capacity);
-        // FIX: Replace `new Rectangle(...)` with object literals, as Rectangle is an interface.
         const se = { x: x + hw, y: y + hh, width: hw, height: hh };
         this.southeast = new Quadtree(se, this.capacity);
-        // FIX: Replace `new Rectangle(...)` with object literals, as Rectangle is an interface.
         const sw = { x: x, y: y + hh, width: hw, height: hh };
         this.southwest = new Quadtree(sw, this.capacity);
 

@@ -1,6 +1,7 @@
 import { Injectable } from '@angular/core';
 import { GoogleGenAI, Type } from '@google/genai';
 import { Genome, GenomeType } from '../models/simulation.model';
+import { GeminiThemeDefinition } from './scenario-factory.service';
 
 export interface GeminiEnemyResponse {
   name: string;
@@ -83,8 +84,8 @@ export class GeminiService {
         },
         genomeType: {
           type: Type.STRING,
-          enum: ["organic", "mechanical", "hybrid", "magic"],
-          description: "The classification of the creature."
+          enum: ["organic", "mechanical", "hybrid", "magic", "custom"],
+          description: "The classification of the creature. Use 'custom' for highly unusual or unclassifiable beings."
         },
         modelUrl: {
           type: Type.STRING,
@@ -129,16 +130,103 @@ export class GeminiService {
         contents: `Find a direct URL to a free, public, downloadable 3D model in GLB format that matches this description: "${description}". Prioritize raw GitHub links, Quaternius, or Kenney.nl assets. Respond ONLY with the full, direct HTTPS URL ending in .glb.`,
       });
       
-      const url = response.text.trim();
+      const url = response.text?.trim();
       // Basic validation to ensure we got a plausible URL
-      if (url.startsWith('https') && url.endsWith('.glb')) {
+      if (url && url.startsWith('https') && url.endsWith('.glb')) {
         return url;
       }
-      console.warn("Fallback search returned an invalid or empty URL:", url);
+      console.warn("Fallback search returned an invalid or empty URL:", url || 'undefined response');
       return null;
 
     } catch (error) {
       console.error("Error finding fallback model URL:", error);
+      return null;
+    }
+  }
+
+  async generateScenario(
+    availableAssets: { 
+      floors: { name: string, url: string }[], 
+      walls: { name: string, url: string }[], 
+      decorations: { name: string, url: string }[] 
+    }
+  ): Promise<GeminiThemeDefinition | null> {
+    if (!this.ai) {
+      console.error("Gemini AI client is not initialized.");
+      return null;
+    }
+
+    const schema: any = {
+      type: Type.OBJECT,
+      properties: {
+        id: { type: Type.STRING, enum: ["ai-generated"] },
+        name: { type: Type.STRING, description: "A creative and evocative name for the arena. E.g., 'The Obsidian Sanctum', 'Crystal Gardens of Lunara'." },
+        description: { type: Type.STRING, description: "A brief, atmospheric description of the location." },
+        skyColor: { type: Type.STRING, description: "A hex color code (e.g., '#1A2B3C') for the sky that matches the theme's mood." },
+        floor: { type: Type.STRING, description: "The URL of the most fitting floor texture from the provided list.", enum: availableAssets.floors.map(f => f.url) },
+        wall: { type: Type.STRING, description: "The URL of the most fitting wall texture from the provided list.", enum: availableAssets.walls.map(w => w.url) },
+        decorations: {
+          type: Type.ARRAY,
+          description: "A list of decorations to place in the scene. Choose ONE model type from the provided list that best fits the theme.",
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              url: { type: Type.STRING, description: "The URL of the chosen decoration model from the list.", enum: availableAssets.decorations.map(d => d.url) },
+              scale: { type: Type.NUMBER, description: "A scale multiplier for the decoration, between 0.5 and 1.5." },
+              positions: {
+                type: Type.ARRAY,
+                description: "An array of position and rotation data for placing 8-12 instances of this decoration along the sides of the arena. Arena walls are at x=-5 and x=5. Arena length is from z=-40 to z=40.",
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    pos: { type: Type.ARRAY, items: { type: Type.NUMBER }, description: "An array of [x, y, z] coordinates. Y should be 0 for ground level." },
+                    rotY: { type: Type.NUMBER, description: "The rotation around the Y axis in radians." }
+                  },
+                  required: ["pos", "rotY"]
+                }
+              }
+            },
+            required: ["url", "scale", "positions"]
+          }
+        }
+      },
+      required: ["id", "name", "description", "skyColor", "floor", "wall", "decorations"]
+    };
+
+    const prompt = `You are a creative world-builder for a dark fantasy video game. Design a unique and immersive combat arena.
+    
+    1.  Invent a compelling theme.
+    2.  Give it a name and a short, atmospheric description.
+    3.  Choose a matching sky color.
+    4.  From the following lists of available assets, select ONE floor texture, ONE wall texture, and ONE type of decoration that best fit your theme.
+    5.  Populate the scene with 8-12 instances of your chosen decoration, placing them along the sides of the arena. The arena is a corridor 10 units wide (from x=-5 to x=5) and 80 units long (from z=-40 to z=40). Keep decorations near the walls (e.g., x=-4.5 or x=4.5) so they don't block the path.
+
+    **Available Assets:**
+    Floors: ${JSON.stringify(availableAssets.floors)}
+    Walls: ${JSON.stringify(availableAssets.walls)}
+    Decorations: ${JSON.stringify(availableAssets.decorations)}
+    `;
+
+    try {
+      const response = await this.ai.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: schema,
+          temperature: 0.9,
+        },
+      });
+      
+      const jsonText = response.text.trim();
+      const responseObject = JSON.parse(jsonText);
+      // Ensure decorations array isn't empty, which can happen.
+      if (!responseObject.decorations || responseObject.decorations.length === 0) {
+        responseObject.decorations = []; // Default to empty if AI fails to provide any.
+      }
+      return responseObject as GeminiThemeDefinition;
+    } catch (error) {
+      console.error("Error generating scenario with Gemini:", error);
       return null;
     }
   }

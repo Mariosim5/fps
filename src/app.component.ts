@@ -5,13 +5,14 @@ import { InspectorComponent } from './components/inspector/inspector.component';
 import { SimulationService } from './services/simulation.service';
 import { ThreeService } from './services/three.service';
 import { Enemy } from './models/simulation.model';
+import { MainMenuComponent } from './components/main-menu/main-menu.component';
 
 @Component({
   selector: 'app-root',
   standalone: true,
   templateUrl: './app.component.html',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CommonModule, ViewerComponent, InspectorComponent],
+  imports: [CommonModule, ViewerComponent, InspectorComponent, MainMenuComponent],
   providers: [ThreeService, DecimalPipe],
   host: {
     'class': 'relative block w-full h-full',
@@ -21,7 +22,7 @@ import { Enemy } from './models/simulation.model';
 })
 export class AppComponent implements OnDestroy, OnInit {
   private simulationService = inject(SimulationService);
-  private threeService = inject(ThreeService);
+  public threeService = inject(ThreeService); // Made public for template access
   private document = inject(DOCUMENT);
 
   // === UI State Signals ===
@@ -43,6 +44,11 @@ export class AppComponent implements OnDestroy, OnInit {
   private enemiesMap = this.simulationService.enemies;
   enemies = computed(() => Array.from(this.enemiesMap().values()));
   enemiesRemaining = computed(() => this.enemiesMap().size);
+
+  // === Forge Status Signals from Service ===
+  forgeStatusMessage = this.simulationService.forgeStatusMessage;
+  generatedEnemiesQueue = this.simulationService.generatedEnemiesQueue;
+  scenarioStatus = this.simulationService.scenarioStatus;
 
   isAutoHideMode = computed(() => this.threeService.controlsLocked());
 
@@ -86,9 +92,9 @@ export class AppComponent implements OnDestroy, OnInit {
     this.document.removeEventListener('fullscreenchange', this.onFullscreenChange);
     clearTimeout(this.hudVisibilityTimeout);
   }
-
-  startGame(): void {
-    this.simulationService.startGame();
+  
+  startSimulation(): void {
+    this.simulationService.startSimulation();
   }
 
   restartGame(): void {

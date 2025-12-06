@@ -1,7 +1,6 @@
 export interface AssetDefinition {
   id: string;
   url: string;
-  // FIX: Added 'custom' to allow for custom enemy types.
   types: ('organic' | 'mechanical' | 'hybrid' | 'magic' | 'custom')[];
   animations: {
     run: string;

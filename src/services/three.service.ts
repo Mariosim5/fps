@@ -6,6 +6,7 @@ import { Enemy } from '../models/simulation.model';
 import { SimulationService } from './simulation.service';
 import { ASSET_MANIFEST, AssetDefinition } from '../config/asset-manifest';
 import { AssetManagerService } from './asset-manager.service';
+import { SceneCustomizationService, ThemeDefinition } from './scene-customization.service';
 
 type SpellType = 'magic' | 'fire' | 'gravity';
 
@@ -25,16 +26,25 @@ interface VisualEffect {
     endScale: number;
 }
 
+interface GravityWellEffect extends VisualEffect {
+    particles: Particle[];
+}
+
 interface Particle {
   mesh: THREE.Mesh;
   velocity: THREE.Vector3;
   life: number;
+  // For gravity well particles
+  angle?: number;
+  radius?: number;
+  center?: THREE.Vector3;
 }
 
 @Injectable()
 export class ThreeService implements OnDestroy {
   private simulationService = inject(SimulationService);
   private assetManagerService = inject(AssetManagerService);
+  private sceneCustomizationService = inject(SceneCustomizationService);
 
   private renderer!: THREE.WebGLRenderer;
   private scene!: THREE.Scene;
@@ -55,6 +65,9 @@ export class ThreeService implements OnDestroy {
   modelsLoaded = signal(false);
 
   private ground!: THREE.Mesh;
+  private leftWall!: THREE.Mesh;
+  private rightWall!: THREE.Mesh;
+  private decorationsGroup!: THREE.Group;
   private torchLights: THREE.PointLight[] = [];
 
   private moveForward = false;
@@ -65,8 +78,8 @@ export class ThreeService implements OnDestroy {
   private direction = new THREE.Vector3();
 
   private projectiles: Projectile[] = [];
-  private activeGravityProjectile: Projectile | null = null;
-  private visualEffects: VisualEffect[] = [];
+  activeGravityProjectile = signal<Projectile | null>(null);
+  private visualEffects: (VisualEffect | GravityWellEffect)[] = [];
   private particles: Particle[] = [];
   private magicProjectileMaterial!: THREE.MeshBasicMaterial;
   private fireProjectileMaterial!: THREE.MeshBasicMaterial;
@@ -98,10 +111,17 @@ export class ThreeService implements OnDestroy {
             }
         }
     });
+    
+    effect(() => {
+      const theme = this.sceneCustomizationService.activeThemeDefinition();
+      if (this.scene && theme) {
+        this.applyTheme(theme);
+      }
+    });
 
     effect(() => {
       const state = this.simulationService.gameState();
-      if ((state === 'won' || state === 'lost' || state === 'menu') && this.controls?.isLocked) {
+      if ((state === 'lost' || state === 'creation') && this.controls?.isLocked) {
         this.controls.unlock();
       }
     });
@@ -136,6 +156,7 @@ export class ThreeService implements OnDestroy {
     this.wand.rotation.set(-Math.PI / 10, Math.PI / 6, Math.PI / 5);
     this.camera.add(this.wand);
     this.wandBasePosition.copy(this.wand.position);
+    this.scene.add(this.camera);
 
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
     this.renderer.setSize(canvas.clientWidth, canvas.clientHeight, false);
@@ -144,7 +165,8 @@ export class ThreeService implements OnDestroy {
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.autoClear = false;
     
-    this.scene.background = new THREE.Color(0x1a1a2a); // Dark blue night sky
+    this.decorationsGroup = new THREE.Group();
+    this.scene.add(this.decorationsGroup);
 
     this.scene.add(new THREE.HemisphereLight(0x445588, 0x111122, 1.5));
     const dirLight = new THREE.DirectionalLight(0xffffff, 0.2); // Moonlight
@@ -152,35 +174,20 @@ export class ThreeService implements OnDestroy {
     dirLight.castShadow = true;
     this.scene.add(dirLight);
     
-    const groundMat = new THREE.MeshLambertMaterial({ color: 0x4a4a4a }); // A dark grey base for the stone
-    this.textureLoader.load('https://cc0-textures.s3.us-east-2.amazonaws.com/PavingStones12/PavingStones12_Color.jpg', 
-      (t) => { // onLoad
-        t.colorSpace = THREE.SRGBColorSpace;
-        t.wrapS = t.wrapT = THREE.RepeatWrapping;
-        t.repeat.set(10, 80);
-        groundMat.map = t;
-        groundMat.needsUpdate = true;
-      },
-      undefined, // onProgress
-      (err) => { // onError
-        console.error('An error occurred loading the ground texture:', err);
-      }
-    );
+    const groundMat = new THREE.MeshLambertMaterial();
     this.ground = new THREE.Mesh(new THREE.PlaneGeometry(10, 80), groundMat);
     this.ground.rotation.x = -Math.PI / 2;
     this.ground.receiveShadow = true;
     this.scene.add(this.ground);
     
     const wallGeo = new THREE.BoxGeometry(1, 4, 80);
-    const wallMat = new THREE.MeshLambertMaterial({ color: 0x222222 });
-    const leftWall = new THREE.Mesh(wallGeo, wallMat);
-    leftWall.position.set(-5.5, 2, 0);
-    this.scene.add(leftWall);
-    const rightWall = new THREE.Mesh(wallGeo, wallMat);
-    rightWall.position.set(5.5, 2, 0);
-    this.scene.add(rightWall);
-    
-    await this._initializeScenery();
+    const wallMat = new THREE.MeshLambertMaterial();
+    this.leftWall = new THREE.Mesh(wallGeo, wallMat);
+    this.leftWall.position.set(-5.5, 2, 0);
+    this.scene.add(this.leftWall);
+    this.rightWall = new THREE.Mesh(wallGeo, wallMat.clone());
+    this.rightWall.position.set(5.5, 2, 0);
+    this.scene.add(this.rightWall);
 
     this.magicProjectileMaterial = new THREE.MeshBasicMaterial({ color: 0x00ffff, emissive: 0x88ffff, emissiveIntensity: 2 });
     this.fireProjectileMaterial = new THREE.MeshBasicMaterial({ color: 0xffa500, emissive: 0xff4500, emissiveIntensity: 2 });
@@ -190,13 +197,66 @@ export class ThreeService implements OnDestroy {
     this.modelsLoaded.set(true);
 
     this.controls = new PointerLockControls(this.camera, canvas);
-    this.scene.add(this.controls.getObject());
 
     canvas.addEventListener('click', this.onClick);
     this.controls.addEventListener('lock', () => this.controlsLocked.set(true));
     this.controls.addEventListener('unlock', () => this.controlsLocked.set(false));
     document.addEventListener('keydown', this.onKeyDown);
     document.addEventListener('keyup', this.onKeyUp);
+  }
+
+  private applyTheme(theme: ThemeDefinition) {
+    // 1. Sky Color
+    this.scene.background = theme.skyColor;
+
+    // 2. Textures
+    this.textureLoader.load(theme.floor, (t) => {
+        t.colorSpace = THREE.SRGBColorSpace;
+        t.wrapS = t.wrapT = THREE.RepeatWrapping;
+        t.repeat.set(10, 80);
+        (this.ground.material as THREE.MeshLambertMaterial).map = t;
+        (this.ground.material as THREE.MeshLambertMaterial).needsUpdate = true;
+    });
+    this.textureLoader.load(theme.wall, (t) => {
+        t.colorSpace = THREE.SRGBColorSpace;
+        t.wrapS = t.wrapT = THREE.RepeatWrapping;
+        t.repeat.set(1, 20);
+        (this.leftWall.material as THREE.MeshLambertMaterial).map = t;
+        (this.leftWall.material as THREE.MeshLambertMaterial).needsUpdate = true;
+        (this.rightWall.material as THREE.MeshLambertMaterial).map = t.clone();
+        (this.rightWall.material as THREE.MeshLambertMaterial).needsUpdate = true;
+    });
+
+    // 3. Decorations
+    this._clearDecorations();
+    if (!theme.decorations) return;
+
+    theme.decorations.forEach(decDef => {
+      if (!decDef.url) return;
+      this.assetManagerService.resolveModelUrl(decDef.url).then(validUrl => {
+        if (validUrl) {
+          this.loader.load(validUrl, (gltf) => {
+            const model = gltf.scene;
+             this._normalizeAndCenterModel(model);
+            decDef.positions.forEach(p => {
+              const instance = model.clone();
+              instance.scale.setScalar(decDef.scale);
+              instance.position.set(p.pos[0], p.pos[1], p.pos[2]);
+              instance.rotation.y = p.rotY;
+              this.decorationsGroup.add(instance);
+            });
+          });
+        }
+      });
+    });
+  }
+
+  private _clearDecorations() {
+    while(this.decorationsGroup.children.length > 0) {
+        const obj = this.decorationsGroup.children[0];
+        this.disposeObject(obj);
+        this.decorationsGroup.remove(obj);
+    }
   }
   
   private async _preloadAllModels(): Promise<void> {
@@ -219,49 +279,6 @@ export class ThreeService implements OnDestroy {
     await Promise.all(loadPromises);
   }
 
-  private async _initializeScenery() {
-    try {
-        const url = 'https://raw.githubusercontent.com/quaternius/Ultimate-Props-Pack-1/main/GLB/WallLamp.glb';
-        const validUrl = await this.assetManagerService.resolveModelUrl(url);
-        if (!validUrl) {
-          console.error("Scenery model URL is invalid, skipping scenery initialization.");
-          return;
-        }
-
-        const gltf = await this.loader.loadAsync(validUrl);
-        const lampModel = gltf.scene;
-        lampModel.scale.set(1.0, 1.0, 1.0);
-
-        const spacing = 8;
-        const worldHalfLength = 40;
-
-        for (let z = -worldHalfLength + spacing; z < worldHalfLength; z += spacing) {
-            // Left Wall Lamp
-            const leftLamp = lampModel.clone();
-            leftLamp.position.set(-5.2, 2.5, z);
-            const leftLight = new THREE.PointLight(0xffaa33, 8, 7);
-            leftLight.castShadow = true;
-            leftLight.position.set(0, -0.2, 0.4);
-            leftLamp.add(leftLight);
-            this.torchLights.push(leftLight);
-            this.scene.add(leftLamp);
-
-            // Right Wall Lamp
-            const rightLamp = lampModel.clone();
-            rightLamp.position.set(5.2, 2.5, z);
-            rightLamp.rotation.y = Math.PI;
-            const rightLight = new THREE.PointLight(0xffaa33, 8, 7);
-            rightLight.castShadow = true;
-            rightLight.position.set(0, -0.2, 0.4);
-            rightLamp.add(rightLight);
-            this.torchLights.push(rightLight);
-            this.scene.add(rightLamp);
-        }
-    } catch (e) {
-        console.error("Failed to load scenery model", e);
-    }
-  }
-
   animate = () => {
     this.frameId = requestAnimationFrame(this.animate);
     const canvas = this.renderer.domElement;
@@ -276,11 +293,11 @@ export class ThreeService implements OnDestroy {
     const gameState = this.simulationService.gameState();
 
     if (gameState === 'running') {
-      this.simulationService.tick(this.controls.getObject().position);
       this.enemyMixers.forEach(mixer => mixer.update(delta));
       this.updateMovement(delta);
       this.updateProjectiles(delta, elapsedTime);
       this.updateTargeting();
+      this.simulationService.tick({ x: this.camera.position.x, y: this.camera.position.z, z: this.camera.position.y });
     } else {
       this.targetedEnemy.set(null);
     }
@@ -357,7 +374,7 @@ export class ThreeService implements OnDestroy {
     this.controls.moveRight(-this.velocity.x * delta);
     this.controls.moveForward(-this.velocity.z * delta);
 
-    const playerPosition = this.controls.getObject().position;
+    const playerPosition = this.camera.position;
     const halfWidth = 4.5;
     const halfLength = 39.5;
     playerPosition.x = Math.max(-halfWidth, Math.min(halfWidth, playerPosition.x));
@@ -383,27 +400,8 @@ export class ThreeService implements OnDestroy {
 
         let shouldBeRemoved = false;
         
-        // Handle detonation for gravity spell
-        if (p.type === 'gravity') {
-            if (elapsedTime - p.spawnTime > 1.5) { // Detonate after 1.5 seconds
-                const wellPosition = p.mesh.position;
-                const wellCenterForWorker = { x: wellPosition.x, y: wellPosition.z, z: wellPosition.y };
-                
-                this.simulationService.applyAreaStatusEffect(
-                    wellCenterForWorker,
-                    7.0, // Radius of effect
-                    { 
-                        type: 'gravity', 
-                        duration: 240, // 4 seconds at 60tps
-                        force: 0.08, // pull strength
-                        center: wellCenterForWorker
-                    }
-                );
-                this.createGravityWellEffect(wellPosition);
-                this.createGravityDetonationEffect(wellPosition);
-                shouldBeRemoved = true;
-            }
-        } else { // Handle collision for other spells
+        // Handle collision for non-gravity spells
+        if (p.type !== 'gravity') {
             for (const [id, enemyObject] of this.enemyObjects.entries()) {
                 const enemyBox = new THREE.Box3().setFromObject(enemyObject);
                 if (enemyBox.containsPoint(p.mesh.position)) {
@@ -419,7 +417,8 @@ export class ThreeService implements OnDestroy {
         }
         
         // Time-based removal for all projectiles
-        if (elapsedTime - p.spawnTime > 5) {
+        const maxLife = p.type === 'gravity' ? 10 : 5; // Gravity projectiles live longer
+        if (elapsedTime - p.spawnTime > maxLife) {
             shouldBeRemoved = true;
         }
 
@@ -428,7 +427,7 @@ export class ThreeService implements OnDestroy {
             this.disposeObject(p.mesh);
             this.scene.remove(p.mesh);
             this.projectiles.splice(i, 1);
-            if(p === this.activeGravityProjectile) this.activeGravityProjectile = null;
+            if(p === this.activeGravityProjectile()) this.activeGravityProjectile.set(null);
         }
     }
   }
@@ -497,14 +496,23 @@ export class ThreeService implements OnDestroy {
             (p.mesh.material as THREE.Material).dispose();
             this.particles.splice(i, 1);
         } else {
-            p.mesh.position.add(p.velocity.clone().multiplyScalar(delta));
+            // Gravity well particles have special movement
+            if (p.angle !== undefined && p.radius !== undefined && p.center) {
+                p.angle += 2 * delta; // rotation speed
+                p.radius -= 1.5 * delta; // pull-in speed
+                p.mesh.position.x = p.center.x + Math.cos(p.angle) * p.radius;
+                p.mesh.position.z = p.center.z + Math.sin(p.angle) * p.radius;
+            } else {
+                 p.mesh.position.add(p.velocity.clone().multiplyScalar(delta));
+            }
             p.mesh.scale.multiplyScalar(1 - delta * 2);
         }
     }
   }
 
   private createGravityWellEffect(position: THREE.Vector3) {
-    const geometry = new THREE.SphereGeometry(7.0, 32, 32);
+    const RADIUS = 7.0;
+    const geometry = new THREE.SphereGeometry(RADIUS, 32, 32);
     const material = new THREE.MeshBasicMaterial({
         color: 0x9400D3,
         transparent: true,
@@ -515,13 +523,40 @@ export class ThreeService implements OnDestroy {
     effectMesh.position.copy(position);
     this.scene.add(effectMesh);
 
+    const effectParticles: Particle[] = [];
+    const particleGeo = new THREE.SphereGeometry(0.08, 4, 4);
+    const particleMat = new THREE.MeshBasicMaterial({ color: 0xeeeeff });
+
+    for (let i = 0; i < 60; i++) {
+        const mesh = new THREE.Mesh(particleGeo, particleMat);
+        const radius = Math.random() * RADIUS;
+        const angle = Math.random() * Math.PI * 2;
+        mesh.position.set(
+            position.x + Math.cos(angle) * radius,
+            position.y,
+            position.z + Math.sin(angle) * radius
+        );
+        this.scene.add(mesh);
+        const p: Particle = {
+            mesh,
+            velocity: new THREE.Vector3(),
+            life: 4.0,
+            angle,
+            radius,
+            center: position,
+        };
+        effectParticles.push(p);
+        this.particles.push(p); // Add to main particle update loop
+    }
+
     this.visualEffects.push({
         mesh: effectMesh,
         startTime: this.clock.getElapsedTime(),
         duration: 4.0, // Match the status effect duration
         initialScale: 0.1,
-        endScale: 1.0
-    });
+        endScale: 1.0,
+        particles: effectParticles
+    } as GravityWellEffect);
   }
 
   private updateSpecialEffects = (delta: number, elapsedTime: number) => {
@@ -531,6 +566,7 @@ export class ThreeService implements OnDestroy {
         if (effectAge >= effect.duration) {
             this.scene.remove(effect.mesh);
             this.disposeObject(effect.mesh);
+            // Particles are removed by the main particle loop when their life ends
             this.visualEffects.splice(i, 1);
         } else {
             const progress = effectAge / effect.duration;
@@ -541,6 +577,34 @@ export class ThreeService implements OnDestroy {
         }
     }
   }
+  
+  private detonateGravityWell(projectile: Projectile) {
+      const wellPosition = projectile.mesh.position;
+      const wellCenterForWorker = { x: wellPosition.x, y: wellPosition.z, z: wellPosition.y };
+
+      this.simulationService.applyAreaStatusEffect(
+          wellCenterForWorker,
+          7.0, // Radius of effect
+          {
+              type: 'gravity',
+              duration: 240, // 4 seconds at 60tps
+              force: 0.08, // pull strength
+              center: wellCenterForWorker
+          }
+      );
+      this.createGravityWellEffect(wellPosition);
+      this.createGravityDetonationEffect(wellPosition);
+
+      // Clean up the projectile immediately
+      const pIndex = this.projectiles.indexOf(projectile);
+      if (pIndex > -1) this.projectiles.splice(pIndex, 1);
+      
+      if (projectile.light) projectile.light.dispose();
+      this.disposeObject(projectile.mesh);
+      this.scene.remove(projectile.mesh);
+      this.activeGravityProjectile.set(null);
+  }
+
 
   private onKeyDown = (event: KeyboardEvent) => {
     switch (event.code) {
@@ -596,10 +660,6 @@ export class ThreeService implements OnDestroy {
   private onClick = () => {
     const gameState = this.simulationService.gameState();
     if (gameState !== 'running') {
-      if (gameState === 'menu') {
-        this.simulationService.startGame();
-        this.controls.lock();
-      }
       return;
     }
 
@@ -609,8 +669,14 @@ export class ThreeService implements OnDestroy {
     }
 
     this.wandRecoil = 0.2;
-
     const spellType = this.currentSpell();
+
+    // --- New Gravity Spell Logic ---
+    if (spellType === 'gravity' && this.activeGravityProjectile()) {
+        this.detonateGravityWell(this.activeGravityProjectile()!);
+        return;
+    }
+
     const projectileGeometry = new THREE.SphereGeometry(spellType === 'gravity' ? 0.2 : 0.1, 8, 8);
     let projectileMaterial;
     switch(spellType) {
@@ -645,7 +711,7 @@ export class ThreeService implements OnDestroy {
     this.projectiles.push(newProjectile);
 
     if (spellType === 'gravity') {
-        this.activeGravityProjectile = newProjectile;
+        this.activeGravityProjectile.set(newProjectile);
     }
   }
   
@@ -785,7 +851,7 @@ export class ThreeService implements OnDestroy {
 
         enemyObject.position.set(enemy.position.x, enemy.position.z, enemy.position.y);
         
-        const playerPosition = this.controls.getObject().position;
+        const playerPosition = this.camera.position;
         enemyObject.lookAt(playerPosition.x, enemyObject.position.y, playerPosition.z);
     }
 

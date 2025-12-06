@@ -11,27 +11,14 @@
 
 <!-- Game State Overlays -->
 @switch (gameState()) {
-  @case ('menu') {
-    <div class="fixed inset-0 z-20 bg-black/70 flex flex-col items-center justify-center text-white text-center p-8">
-      <h1 class="text-6xl font-bold text-cyan-300 drop-shadow-lg mb-4 title-glow">Eidolon Engine</h1>
-      <p class="text-xl text-gray-300 mb-8">Sopravvivi all'orda infinita di Eidolon.</p>
-      
-      <div class="bg-gray-800/80 p-6 rounded-lg shadow-2xl max-w-md">
-        <h2 class="text-2xl font-semibold mb-4 text-cyan-400">Controlli</h2>
-        <ul class="space-y-2 text-lg text-left">
-          <li><span class="font-mono bg-gray-900 px-2 py-1 rounded">W, A, S, D</span> - Movimento</li>
-          <li><span class="font-mono bg-gray-900 px-2 py-1 rounded">Mouse</span> - Mira</li>
-          <li><span class="font-mono bg-gray-900 px-2 py-1 rounded">Click</span> - Lancia Incantesimo</li>
-          <li><span class="font-mono bg-gray-900 px-2 py-1 rounded">1, 2, 3</span> - Seleziona Incantesimo</li>
-        </ul>
-      </div>
-
-      <div class="flex space-x-4">
-        <button (click)="startGame()" class="mt-10 px-8 py-4 bg-cyan-600 hover:bg-cyan-500 text-white font-bold text-2xl rounded-lg shadow-lg transition-transform transform hover:scale-105">
-          Inizia Simulazione
-        </button>
-      </div>
-    </div>
+  @case ('creation') {
+    <app-main-menu 
+      (simulationRequested)="startSimulation()" 
+      [modelsLoaded]="modelsLoaded()"
+      [forgeStatusMessage]="forgeStatusMessage()"
+      [generatedEnemiesQueue]="generatedEnemiesQueue()"
+      [scenarioStatus]="scenarioStatus()"
+    ></app-main-menu>
   }
   @case ('lost') {
     <div class="fixed inset-0 z-20 bg-red-950/80 flex flex-col items-center justify-center text-white text-center p-8">
@@ -106,7 +93,7 @@
             </div>
             <span class="text-white font-mono text-sm px-2 py-0.5 bg-gray-900/80 rounded">2</span>
           </div>
-          <div class="flex flex-col items-center gap-1.5 p-2 rounded-md transition-colors" [class.bg-white/20]="currentSpell() === 'gravity'">
+          <div class="flex flex-col items-center gap-1.5 p-2 rounded-md transition-colors" [class.bg-white/20]="currentSpell() === 'gravity'" [class.animate-pulse]="threeService.activeGravityProjectile()">
             <div class="w-12 h-12 rounded-md border-2 flex items-center justify-center text-3xl" [class.border-violet-500]="currentSpell() === 'gravity'" [class.border-gray-500]="currentSpell() !== 'gravity'">
               🌀
             </div>
