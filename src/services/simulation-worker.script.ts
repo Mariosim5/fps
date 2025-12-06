@@ -244,13 +244,12 @@ class SimulationWorkerLogic {
         const defeatedEnemies = new Set();
         
         for (let enemy of this.enemies.values()) {
+            // --- Process status effects first ---
             if (enemy.statusEffects.length > 0) {
                 for (const effect of enemy.statusEffects) {
                     switch (effect.type) {
                         case 'burning':
-                            if (effect.damagePerTick) {
-                                enemy.health -= effect.damagePerTick;
-                            }
+                            if (effect.damagePerTick) enemy.health -= effect.damagePerTick;
                             break;
                         case 'gravity':
                             if (effect.center && effect.force) {
@@ -270,66 +269,72 @@ class SimulationWorkerLogic {
                 );
             }
 
-            const nearbyEnemies = quadtree.query({ x: enemy.position.x - 5, y: enemy.position.y - 5, width: 10, height: 10 })
-                .map(p => this.enemies.get(p.id)).filter(Boolean);
-            
-            enemy = this.agentDecisionService.decideBehavior(enemy, playerPosition, nearbyEnemies);
-            
+            // --- Check for defeat from effects ---
             if (enemy.health <= 0) {
                 defeatedEnemies.add(enemy.id);
                 continue;
             }
+
+            // --- AI and Movement Logic ---
+            const nearbyEnemies = quadtree.query({ x: enemy.position.x - 5, y: enemy.position.y - 5, width: 10, height: 10 })
+                .map(p => this.enemies.get(p.id)).filter(Boolean);
             
-            const moveSpeed = enemy.genome.speed;
+            enemy = this.agentDecisionService.decideBehavior(enemy, playerPosition, nearbyEnemies);
+
             const dx = playerPosition.x - enemy.position.x;
             const dz = playerPosition.y - enemy.position.y;
             const distance = Math.sqrt(dx * dx + dz * dz);
             
+            // --- Attack and Knockback Logic ---
             if (distance < 1.5) {
                 if (this.playerDamageCooldown <= 0) {
                     this.damagePlayer(10);
                     this.playerDamageCooldown = 30; // 0.5 sec cooldown at 60tps
                 }
 
-                // Instead of dying on contact, knock the enemy back.
                 const knockbackDistance = 2.5;
-                if (distance > 0.01) { // Check to avoid division by zero
+                if (distance > 0.01) {
                     enemy.position.x -= (dx / distance) * knockbackDistance;
                     enemy.position.y -= (dz / distance) * knockbackDistance;
                 }
 
-                // And force a temporary behavior change to prevent getting stuck.
                 enemy.behavior = 'strafing';
                 enemy.strafeDirection = Math.random() < 0.5 ? -1 : 1;
                 enemy.behaviorTimeout = 90 + Math.floor(Math.random() * 60);
                 
-                continue; // Skip movement for this tick to let the knockback apply.
+                continue; // Skip normal movement for this tick
             }
             
-            switch (enemy.behavior) {
-                case 'advancing':
-                    if (distance > 1.5) {
+            // --- Regular Movement Logic (No longer freezes) ---
+            if (distance > 0.01) { // Safety check to prevent division by zero (NaN bug)
+                const moveSpeed = enemy.genome.speed;
+                switch (enemy.behavior) {
+                    case 'advancing':
                         enemy.position.x += (dx / distance) * moveSpeed;
                         enemy.position.y += (dz / distance) * moveSpeed;
-                    }
-                    break;
-                case 'strafing':
-                    const len = Math.sqrt(dz*dz + (-dx)*(-dx));
-                    const strafeDirX = dz / len;
-                    const strafeDirZ = -dx / len;
-                    enemy.position.x += strafeDirX * moveSpeed * 0.7 * enemy.strafeDirection;
-                    enemy.position.y += strafeDirZ * moveSpeed * 0.7 * enemy.strafeDirection;
-                    break;
+                        break;
+                    case 'strafing':
+                        const len = Math.sqrt(dz*dz + (-dx)*(-dx));
+                        if (len > 0.01) {
+                            const strafeDirX = dz / len;
+                            const strafeDirZ = -dx / len;
+                            enemy.position.x += strafeDirX * moveSpeed * 0.7 * enemy.strafeDirection;
+                            enemy.position.y += strafeDirZ * moveSpeed * 0.7 * enemy.strafeDirection;
+                        }
+                        break;
+                }
             }
             
+            // --- Boundary checks ---
             const halfWidth = this.worldWidth / 2 + 0.5;
             enemy.position.x = Math.max(-halfWidth, Math.min(halfWidth, enemy.position.x));
             if (enemy.position.y > this.worldLength / 2 + 2) {
-                defeatedEnemies.add(enemy.id);
+                defeatedEnemies.add(enemy.id); // De-spawn if they go past the player
             }
             enemy.age++;
         }
         
+        // --- Process defeated enemies ---
         if (defeatedEnemies.size > 0) {
             defeatedEnemies.forEach(id => {
                 this.enemies.delete(id);
@@ -338,6 +343,7 @@ class SimulationWorkerLogic {
             this.enemiesDefeated += defeatedEnemies.size;
         }
         
+        // --- Check game over condition ---
         if (this.playerHealth <= 0) {
             this.gameState = 'lost';
             self.postMessage({ type: 'gameStateUpdate', payload: 'lost' });

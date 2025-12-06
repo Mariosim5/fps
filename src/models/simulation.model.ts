@@ -38,3 +38,5 @@ export interface Enemy {
   behaviorTimeout: number; // Ticks until next decision
   strafeDirection: -1 | 1;
 }
+
+export type EnemyTemplate = Partial<Enemy>;

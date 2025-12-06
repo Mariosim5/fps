@@ -15,9 +15,6 @@
     <app-main-menu 
       (simulationRequested)="startSimulation()" 
       [modelsLoaded]="modelsLoaded()"
-      [forgeStatusMessage]="forgeStatusMessage()"
-      [generatedEnemiesQueue]="generatedEnemiesQueue()"
-      [scenarioStatus]="scenarioStatus()"
     ></app-main-menu>
   }
   @case ('lost') {

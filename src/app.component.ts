@@ -45,11 +45,6 @@ export class AppComponent implements OnDestroy, OnInit {
   enemies = computed(() => Array.from(this.enemiesMap().values()));
   enemiesRemaining = computed(() => this.enemiesMap().size);
 
-  // === Forge Status Signals from Service ===
-  forgeStatusMessage = this.simulationService.forgeStatusMessage;
-  generatedEnemiesQueue = this.simulationService.generatedEnemiesQueue;
-  scenarioStatus = this.simulationService.scenarioStatus;
-
   isAutoHideMode = computed(() => this.threeService.controlsLocked());
 
   // For damage flash effect
@@ -85,7 +80,7 @@ export class AppComponent implements OnDestroy, OnInit {
   }
 
   ngOnInit(): void {
-    this.simulationService.prepareAndStartGame();
+    this.simulationService.prepareGame();
   }
 
   ngOnDestroy(): void {

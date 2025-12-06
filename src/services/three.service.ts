@@ -5,7 +5,6 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { Enemy } from '../models/simulation.model';
 import { SimulationService } from './simulation.service';
 import { ASSET_MANIFEST, AssetDefinition } from '../config/asset-manifest';
-import { AssetManagerService } from './asset-manager.service';
 import { SceneCustomizationService, ThemeDefinition } from './scene-customization.service';
 
 type SpellType = 'magic' | 'fire' | 'gravity';
@@ -43,7 +42,6 @@ interface Particle {
 @Injectable()
 export class ThreeService implements OnDestroy {
   private simulationService = inject(SimulationService);
-  private assetManagerService = inject(AssetManagerService);
   private sceneCustomizationService = inject(SceneCustomizationService);
 
   private renderer!: THREE.WebGLRenderer;
@@ -233,11 +231,11 @@ export class ThreeService implements OnDestroy {
 
     theme.decorations.forEach(decDef => {
       if (!decDef.url) return;
-      this.assetManagerService.resolveModelUrl(decDef.url).then(validUrl => {
-        if (validUrl) {
-          this.loader.load(validUrl, (gltf) => {
+      this.loader.load(
+        decDef.url,
+        (gltf) => { // onSuccess
             const model = gltf.scene;
-             this._normalizeAndCenterModel(model);
+            this._normalizeAndCenterModel(model);
             decDef.positions.forEach(p => {
               const instance = model.clone();
               instance.scale.setScalar(decDef.scale);
@@ -245,9 +243,12 @@ export class ThreeService implements OnDestroy {
               instance.rotation.y = p.rotY;
               this.decorationsGroup.add(instance);
             });
-          });
+        },
+        undefined, // onProgress
+        (error) => { // onError
+          console.error(`Failed to load decoration asset ${decDef.url}`, error);
         }
-      });
+      );
     });
   }
 
@@ -261,19 +262,19 @@ export class ThreeService implements OnDestroy {
   
   private async _preloadAllModels(): Promise<void> {
     const loadPromises = ASSET_MANIFEST.map(async (definition) => {
-        const isValid = await this.assetManagerService.resolveModelUrl(definition.url);
-        if (isValid) {
-            try {
-                const gltf = await this.loader.loadAsync(definition.url);
-                const model = gltf.scene;
-                this._normalizeAndCenterModel(model);
-                (model.userData as any).animations = gltf.animations;
-                this.preloadedModels.set(definition.url, { model, definition });
-            } catch (err) {
-                console.error(`GLTFLoader failed even after URL validation for: ${definition.url}`, err);
-            }
-        } else {
+        if (!definition.url || !definition.url.startsWith('https') || !definition.url.endsWith('.glb')) {
              console.warn(`AssetManager: Skipping invalid manifest URL during preload: ${definition.url}`);
+             return;
+        }
+
+        try {
+            const gltf = await this.loader.loadAsync(definition.url);
+            const model = gltf.scene;
+            this._normalizeAndCenterModel(model);
+            (model.userData as any).animations = gltf.animations;
+            this.preloadedModels.set(definition.url, { model, definition });
+        } catch (err) {
+            console.error(`GLTFLoader failed for: ${definition.url}`, err);
         }
     });
     await Promise.all(loadPromises);
@@ -741,91 +742,92 @@ export class ThreeService implements OnDestroy {
     if (!this.scene || !this.modelsLoaded()) return;
     const activeEnemyIds = new Set(enemies.map(e => e.id));
 
+    // A reusable function to create a fallback visual for enemies whose models failed to load.
+    const createFallbackVisual = (targetGroup: THREE.Group) => {
+        console.warn(`Creating fallback placeholder for enemy ${targetGroup.userData['enemyId']}.`);
+        const fallbackGeo = new THREE.BoxGeometry(0.7, 1.2, 0.7); // Sized like a creature
+        const fallbackMat = new THREE.MeshStandardMaterial({ color: 0xff0000, emissive: 0x330000 });
+        const fallbackMesh = new THREE.Mesh(fallbackGeo, fallbackMat);
+        fallbackMesh.position.y = 1.2 / 2; // Position so its base is on the ground
+        fallbackMesh.castShadow = true;
+        targetGroup.add(fallbackMesh);
+
+        // Also setup a health bar for the fallback to prevent crashes in the render loop.
+        const healthBarGroup = new THREE.Group();
+        healthBarGroup.position.y = 1.2 + 0.2; // Position above the box
+        const BAR_WIDTH = 0.8;
+        const BAR_HEIGHT = 0.1;
+        const bgMesh = new THREE.Mesh(new THREE.PlaneGeometry(BAR_WIDTH, BAR_HEIGHT), new THREE.MeshBasicMaterial({ color: 0xcc0000, side: THREE.DoubleSide }));
+        const fgMesh = new THREE.Mesh(new THREE.PlaneGeometry(BAR_WIDTH, BAR_HEIGHT), new THREE.MeshBasicMaterial({ color: 0x00cc00, side: THREE.DoubleSide }));
+        fgMesh.position.z = 0.001;
+        healthBarGroup.add(bgMesh, fgMesh);
+        targetGroup.add(healthBarGroup);
+        (targetGroup.userData as any).healthBar = fgMesh;
+        (targetGroup.userData as any).healthBarContainer = healthBarGroup;
+        (targetGroup.userData as any).BAR_WIDTH = BAR_WIDTH;
+    };
+
     for (const enemy of enemies) {
         let enemyObject = this.enemyObjects.get(enemy.id);
         
         if (!enemyObject) {
-            // Create a container group for the enemy. It will be populated asynchronously.
+            // --- Create a new enemy object ---
             const containerGroup = new THREE.Group();
             containerGroup.userData['enemyId'] = enemy.id;
-            
             this.enemyObjects.set(enemy.id, containerGroup);
             this.scene.add(containerGroup);
             enemyObject = containerGroup;
 
-            // --- Asynchronously load the real model (URL is guaranteed to be valid) ---
             const modelUrl = enemy.modelUrl;
-            if (modelUrl) {
-                const onModelLoaded = (modelData: { model: THREE.Group, definition: AssetDefinition }) => {
-                    const existingObject = this.enemyObjects.get(enemy.id);
-                    if (!existingObject) return; // Enemy might have been removed while model was loading
+            const preloadedData = modelUrl ? this.preloadedModels.get(modelUrl) : undefined;
 
-                    // Add the actual model's children to the container
-                    const modelInstance = modelData.model.clone();
-                    while(modelInstance.children.length > 0) {
-                        existingObject.add(modelInstance.children[0]);
+            if (preloadedData) {
+                // SUCCESS: Model was preloaded, so create the real visual
+                const modelData = preloadedData;
+                const modelInstance = modelData.model.clone();
+                enemyObject.add(modelInstance);
+
+                enemyObject.traverse(c => {
+                    c.userData['enemyId'] = enemy.id;
+                    if ((c as THREE.Mesh).isMesh) {
+                        c.castShadow = true;
+                        (c as THREE.Mesh).material = (c as THREE.Mesh).material.clone();
                     }
+                });
 
-                    existingObject.traverse(c => {
-                        c.userData['enemyId'] = enemy.id;
-                        if ((c as THREE.Mesh).isMesh) {
-                            c.castShadow = true;
-                            // Ensure materials are unique to allow for individual effects like burning
-                            (c as THREE.Mesh).material = (c as THREE.Mesh).material.clone();
-                        }
-                    });
-
-                    // Setup animations
-                    const animations = (modelData.model.userData as any).animations as THREE.AnimationClip[];
-                    if (animations?.length) {
-                        const mixer = new THREE.AnimationMixer(existingObject);
-                        this.enemyMixers.set(enemy.id, mixer);
-                        const runClipName = modelData.definition.animations.run;
+                // Setup animations
+                const animations = (modelData.model.userData as any).animations as THREE.AnimationClip[];
+                if (animations?.length) {
+                    const mixer = new THREE.AnimationMixer(enemyObject);
+                    this.enemyMixers.set(enemy.id, mixer);
+                    const runClipName = modelData.definition.animations.run;
+                    if (runClipName !== 'none') {
                         const clip = THREE.AnimationClip.findByName(animations, runClipName) || animations.find(c => c.name.toLowerCase().includes('walk')) || animations[0];
                         if (clip) mixer.clipAction(clip).play();
                     }
-
-                    // Setup health bar
-                    const healthBarGroup = new THREE.Group();
-                    healthBarGroup.position.y = enemy.genome.bodySize * (modelData.definition.scale || 1.0) * 1.2 + 0.2;
-                    const BAR_WIDTH = 0.8;
-                    const BAR_HEIGHT = 0.1;
-                    const backgroundMesh = new THREE.Mesh( new THREE.PlaneGeometry(BAR_WIDTH, BAR_HEIGHT), new THREE.MeshBasicMaterial({ color: 0xcc0000, side: THREE.DoubleSide }) );
-                    const foregroundMesh = new THREE.Mesh( new THREE.PlaneGeometry(BAR_WIDTH, BAR_HEIGHT), new THREE.MeshBasicMaterial({ color: 0x00cc00, side: THREE.DoubleSide }) );
-                    foregroundMesh.position.z = 0.001;
-                    healthBarGroup.add(backgroundMesh, foregroundMesh);
-                    existingObject.add(healthBarGroup);
-                    (existingObject.userData as any).healthBar = foregroundMesh;
-                    (existingObject.userData as any).healthBarContainer = healthBarGroup;
-                    (existingObject.userData as any).BAR_WIDTH = BAR_WIDTH;
-                };
-
-                const preloadedData = this.preloadedModels.get(modelUrl);
-                if (preloadedData) {
-                    onModelLoaded(preloadedData);
-                } else {
-                    // This is a custom URL, validate and load it.
-                    // Validation is for caching; factory already guaranteed it's a good URL.
-                    this.assetManagerService.resolveModelUrl(modelUrl).then(validUrl => {
-                        if (validUrl) {
-                            this.loader.loadAsync(validUrl)
-                                .then(gltf => {
-                                    const model = gltf.scene;
-                                    this._normalizeAndCenterModel(model);
-                                    (model.userData as any).animations = gltf.animations;
-                                    const definition: AssetDefinition = { id: 'custom', url: validUrl, types: [enemy.genomeType], animations: { run: 'run' }, scale: 1.0 };
-                                    this.preloadedModels.set(validUrl, { model, definition });
-                                    onModelLoaded({ model, definition });
-                                })
-                                .catch(err => {
-                                    console.error(`Failed to load custom model ${validUrl}. Object will remain invisible.`, err);
-                                });
-                        }
-                    });
                 }
+
+                // Setup health bar
+                const healthBarGroup = new THREE.Group();
+                healthBarGroup.position.y = enemy.genome.bodySize * (modelData.definition.scale || 1.0) * 1.2 + 0.2;
+                const BAR_WIDTH = 0.8;
+                const BAR_HEIGHT = 0.1;
+                const backgroundMesh = new THREE.Mesh( new THREE.PlaneGeometry(BAR_WIDTH, BAR_HEIGHT), new THREE.MeshBasicMaterial({ color: 0xcc0000, side: THREE.DoubleSide }) );
+                const foregroundMesh = new THREE.Mesh( new THREE.PlaneGeometry(BAR_WIDTH, BAR_HEIGHT), new THREE.MeshBasicMaterial({ color: 0x00cc00, side: THREE.DoubleSide }) );
+                foregroundMesh.position.z = 0.001;
+                healthBarGroup.add(backgroundMesh, foregroundMesh);
+                enemyObject.add(healthBarGroup);
+                (enemyObject.userData as any).healthBar = foregroundMesh;
+                (enemyObject.userData as any).healthBarContainer = healthBarGroup;
+                (enemyObject.userData as any).BAR_WIDTH = BAR_WIDTH;
+
+            } else {
+                // FAILURE: Model was not preloaded, create a fallback visual
+                createFallbackVisual(enemyObject);
             }
         }
         
+        // --- Update existing enemy objects (both real and fallback) ---
         const assetDef = this.preloadedModels.get(enemy.modelUrl!)?.definition;
         const baseScale = assetDef ? assetDef.scale : 1.0;
         enemyObject.scale.setScalar(enemy.genome.bodySize * baseScale);
@@ -843,8 +845,8 @@ export class ThreeService implements OnDestroy {
             if ((child as THREE.Mesh).isMesh) {
                 const material = (child as THREE.Mesh).material as THREE.MeshStandardMaterial;
                 if (material?.emissive) {
-                    material.emissive.set(isBurning ? 0xff4500 : 0x000000);
-                    material.emissiveIntensity = isBurning ? 0.5 : 0;
+                    material.emissive.set(isBurning ? 0xffa500 : 0x000000);
+                    material.emissiveIntensity = isBurning ? 0.8 : 0;
                 }
             }
         });
@@ -852,7 +854,9 @@ export class ThreeService implements OnDestroy {
         enemyObject.position.set(enemy.position.x, enemy.position.z, enemy.position.y);
         
         const playerPosition = this.camera.position;
-        enemyObject.lookAt(playerPosition.x, enemyObject.position.y, playerPosition.z);
+        const dx = playerPosition.x - enemyObject.position.x;
+        const dz = playerPosition.z - enemyObject.position.z;
+        enemyObject.rotation.y = Math.atan2(dx, dz) + Math.PI;
     }
 
     this.enemyObjects.forEach((object, id) => {

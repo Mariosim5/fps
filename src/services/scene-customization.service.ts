@@ -115,7 +115,6 @@ export const THEMES: Record<Theme, ThemeDefinition & { id: Theme }> = {
 })
 export class SceneCustomizationService {
   selectedThemeId = signal<Theme>('default');
-  preGeneratedAiTheme = signal<ThemeDefinition | null>(null);
   private overrideTheme = signal<ThemeDefinition | null>(null);
 
   activeThemeDefinition = computed<ThemeDefinition>(() => {
@@ -139,24 +138,16 @@ export class SceneCustomizationService {
     this.overrideTheme.set(null); // Clear any override when user makes a manual selection
   }
   
-  setPreGeneratedAiTheme(theme: ThemeDefinition | null) {
-    this.preGeneratedAiTheme.set(theme);
-  }
-
-  usePreGeneratedAiTheme() {
-    const theme = this.preGeneratedAiTheme();
+  useRandomTheme() {
+    const themeIds = Object.keys(THEMES) as Theme[];
+    const randomThemeId = themeIds[Math.floor(Math.random() * themeIds.length)];
+    const theme = this.getThemeDefinition(randomThemeId);
     if (theme) {
-      this.overrideTheme.set(theme);
-    } else {
-        // Fallback: pick a random theme from the presets if AI theme isn't ready
-        const themeIds = Object.keys(THEMES) as Theme[];
-        const randomThemeId = themeIds[Math.floor(Math.random() * themeIds.length)];
-        this.selectTheme(randomThemeId);
+        this.overrideTheme.set(theme);
     }
   }
   
   resetToDefaultTheme() {
     this.selectTheme('default');
-    this.setPreGeneratedAiTheme(null);
   }
 }
